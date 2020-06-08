@@ -1,0 +1,55 @@
+name: .NET Core
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Setup .NET Core
+      uses: actions/setup-dotnet@v1
+      with:
+        dotnet-version: 3.1.300
+    - name: Install dependencies
+      run: dotnet restore
+    - name: Build
+      run: dotnet build --configuration Release --no-restore
+    - name: Publish
+      run: dotnet publish -c Release
+    - name: Test
+      run: dotnet test --no-restore --verbosity normal
+    - name: Publish artifacts
+      uses: actions/upload-artifact@v2
+      with:
+        name: blazorapp
+        path: bin/Release/netstandard2.1/wwwroot
+        
+  copy:
+    
+    runs-on: ubuntu-latest
+    needs: [build]
+    
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v2
+        with:
+          name: blazorapp
+      - name: Copycat
+        uses: andstor/copycat-action@v3
+        with:
+          personal_token: 69ff298844c67f005f06be22b37c147e9412b378
+          src_path: /blazorapp
+          dst_path: /
+          dst_owner: crmme
+          dst_repo_name: crmme.github.io
+          dst_branch: master
+          src_branch: master
+          username: nickbeau
+          email: nick@releasedgroup.com
