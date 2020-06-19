@@ -5,7 +5,7 @@ html, body {
 }
 
 a, .btn-link {
-    color: #0366d6;
+    color: #59d0f6;
 }
 
 .btn-primary {
@@ -15,7 +15,7 @@ a, .btn-link {
 }
 
 body {
-    color: #f7f7f7f7;
+    color: #fff;
     background-color:#000;
     margin-bottom: 60px;
 }
