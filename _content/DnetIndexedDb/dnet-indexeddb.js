@@ -37,6 +37,11 @@ window.dnetindexeddbinterop = (function () {
         'upgradeneeded': 'upgradeneeded'
     };
 
+    const extentTypes = {
+        Max: "prev",
+        Min: "next"
+    }
+
     var Rx = window['rxjs'];
 
     function splitEvery(n, list) {
@@ -68,12 +73,13 @@ window.dnetindexeddbinterop = (function () {
 
             } else {
 
-                var openRequest = indexedDB.open(dbModel.name, dbModel.version);
+                const openRequest = indexedDB.open(dbModel.name, dbModel.version);
 
-                var onSuccess = (event) => {
+                const onSuccess = (event) => {
 
                     dbModel.instance = event.target.result;
-                    dbModels.push({ 'dbModelId': dbModelIdCount++, 'dbModel': dbModel});
+
+                    dbModels.push({ 'dbModel': dbModel });
 
                     if (isUpgradeneeded) {
                         observer.next(dbModelIdCount);
@@ -84,19 +90,19 @@ window.dnetindexeddbinterop = (function () {
                     observer.complete();
                 };
 
-                var onError = (err) => {
+                const onError = (err) => {
                     observer.error(indexedDbMessages.DB_OPEN_ERROR);
                 };
 
-                var onUpgradeneeded = (event) => {
+                const onUpgradeneeded = (event) => {
 
-                    var newDbVersion = event.target.result;
-                    var storeModel = dbModel.stores;
+                    const currentDbVersion = event.target.result;
+                    const storeModel = dbModel.stores;
 
                     isUpgradeneeded = true;
 
-                    var oldStores = newDbVersion.objectStoreNames;
-                    upgradeDb(newDbVersion, storeModel, oldStores);
+                    const oldStores = currentDbVersion.objectStoreNames;
+                    upgradeDb(currentDbVersion, storeModel, oldStores, event.target.transaction);
                 };
 
                 openRequest.addEventListener(eventTypes.success, onSuccess);
@@ -113,28 +119,82 @@ window.dnetindexeddbinterop = (function () {
         });
     }
 
-    function upgradeDb(newDbVersion, stores, oldStores) {
+    function upgradeDb(currentDbVersion, stores, oldStores, transaction) {
 
-        var objectStore;
+        const oldStoresArray = [...oldStores];
 
-        var index;
-        if (oldStores.length > 0) {
+        if (oldStoresArray.length > 0) {
 
-            for (index = 0; index < oldStores.length; index++) {
+            /* Check every current store against the old version. If it is not in the old version, create the store.
+             * If it exists in the old, add or delete indexes where necessary.
+             */
+            for (let store of stores) {
 
-                const name = oldStores[index];
-                newDbVersion.deleteObjectStore(name);
+                const haveThisStore = oldStoresArray.indexOf(store.name) > -1;
+
+                if (haveThisStore) {
+
+                    const objectStore = transaction.objectStore(store.name);
+
+                    const oldStoreIndexes = objectStore.indexNames;
+
+                    const oldStoreIndexesArray = [...oldStoreIndexes];
+                    const currentIndexesArray = store.indexes.map(p => p.name);
+
+                    const itemsToDeleteNames = oldStoreIndexesArray.filter(e => currentIndexesArray.indexOf(e) === -1);
+                    const itemsToAddNames = currentIndexesArray.filter(e => oldStoreIndexesArray.indexOf(e) === -1);
+
+                    for (let itemToAddName of itemsToAddNames) {
+
+                        const newIndex = store.indexes.find(p => p.name === itemToAddName);
+
+                        if (newIndex != null) objectStore.createIndex(newIndex.name, newIndex.name, newIndex.definition);
+
+                    }
+
+                    for (let itemToDeleteName of itemsToDeleteNames) {
+
+                        objectStore.deleteIndex(itemToDeleteName);
+
+                    }
+
+                } else {
+                    createStore(currentDbVersion, store);
+                }
+            }
+
+            /* Check every old store against the current version. If it is not in the current version, delete the old store.
+             * This is necessary as old stores appear to remain even if they are not anymore defined in the current version.
+             */
+            const currentStoreNames = stores.map(p => p.name);
+
+            for (let oldStore of oldStoresArray) {
+
+                const notInCurrentVersion = currentStoreNames.indexOf(oldStore) == -1;
+
+                if (notInCurrentVersion) {
+                    currentDbVersion.deleteObjectStore(oldStore);
+                }
+
+            }
+
+        } else {
+
+            for (let store of stores) {
+                createStore(currentDbVersion, store);
             }
         }
+    }
 
-        for (let store of stores) {
+    function createStore(currentDbVersion, store) {
 
-            objectStore = newDbVersion.createObjectStore(store.name, store.key);
+        const key = store.key.keyPath === "" ? { autoIncrement: true } : store.key;
 
-            for (index of store.indexes) {
+        const objectStore = currentDbVersion.createObjectStore(store.name, key);
 
-                objectStore.createIndex(index.name, index.name, index.definition);
-            }
+        for (let index of store.indexes) {
+
+            objectStore.createIndex(index.name, index.name, index.definition);
         }
     }
 
@@ -149,8 +209,15 @@ window.dnetindexeddbinterop = (function () {
             var deleteRequest = indexedDB.deleteDatabase(dbModel.name);
 
             var onSuccess = (event) => {
-                dbModel.instance = null;
+
+                const index = dbModels.findIndex(item => item.dbModelGuid === dbModel.dbModelGuid);
+
+                if (index !== -1) {
+                    dbModels.splice(index, 1);
+                };
+
                 observer.next(indexedDbMessages.DB_DELETED);
+
                 observer.complete();
             };
 
@@ -193,7 +260,14 @@ window.dnetindexeddbinterop = (function () {
                 const objectStore = transaction.objectStore(objectStoreName);
 
                 const addItem = (item) => {
+
                     return new Rx.Observable((addReqObserver) => {
+
+                        const store = dbModel.stores.find(p => p.name === objectStoreName);
+
+                        const keyPath = store.key.keyPath;
+
+                        if (keyPath !== "" && dbModel.useKeyGenerator) delete item[keyPath];
 
                         const addRequest = objectStore.add(item);
 
@@ -266,26 +340,27 @@ window.dnetindexeddbinterop = (function () {
 
                 const objectStore = transaction.objectStore(objectStoreName);
 
-                const add = (item) => {
-                    return new Rx.Observable((addReqObserver) => {
+                const update = (item) => {
 
-                        const addRequest = objectStore.put(item);
+                    return new Rx.Observable((updateReqObserver) => {
+
+                        const updateRequest = objectStore.put(item);
 
                         const onRequestError = (error) => {
-                            addReqObserver.error(indexedDbMessages.DB_DATA_UPDATE_ERROR);
+                            updateReqObserver.error(indexedDbMessages.DB_DATA_UPDATE_ERROR);
                         };
 
                         const onSuccess = (event) => {
-                            addReqObserver.next(event);
-                            addReqObserver.complete();
+                            updateReqObserver.next(event);
+                            updateReqObserver.complete();
                         };
 
-                        addRequest.addEventListener(eventTypes.success, onSuccess);
-                        addRequest.addEventListener(eventTypes.error, onRequestError);
+                        updateRequest.addEventListener(eventTypes.success, onSuccess);
+                        updateRequest.addEventListener(eventTypes.error, onRequestError);
 
                         return () => {
-                            addRequest.removeEventListener(eventTypes.success, onSuccess);
-                            addRequest.removeEventListener(eventTypes.error, onRequestError);
+                            updateRequest.removeEventListener(eventTypes.success, onSuccess);
+                            updateRequest.removeEventListener(eventTypes.error, onRequestError);
                         };
 
                     });
@@ -296,12 +371,15 @@ window.dnetindexeddbinterop = (function () {
 
                 const splitArray = splitEvery(concurrentTranscations, data);
 
-                const addRequestSubscriber = Rx.from(splitArray).pipe(
+                const updateRequestSubscriber = Rx.from(splitArray).pipe(
 
                     Rx.operators.concatMap((itemList) => {
+
                         return Rx.from(itemList).pipe(
+
                             Rx.operators.mergeMap((val) => {
-                                return add(val);
+
+                                return update(val);
                             })
                         );
                     })
@@ -311,7 +389,82 @@ window.dnetindexeddbinterop = (function () {
                 return () => {
                     transaction.removeEventListener(eventTypes.complete, onComplete);
                     transaction.removeEventListener(eventTypes.error, onTransactionError);
-                    addRequestSubscriber.unsubscribe();
+                    updateRequestSubscriber.unsubscribe();
+                };
+
+            }
+        });
+    }
+
+    function updateItemsByKey(dbModel, objectStoreName, data, keys) {
+
+        return Rx.Observable.create((observer) => {
+
+            if (dbModel.instance === null) {
+
+                observer.error(indexedDbMessages.DB_CLOSE);
+
+            } else {
+
+                const transaction = dbModel.instance.transaction([objectStoreName], transactionTypes.readwrite);
+
+                const onTransactionError = (error) => {
+                    observer.error(indexedDbMessages.DB_TRANSACTION_ERROR);
+                };
+
+                const onComplete = (event) => {
+                    observer.next(indexedDbMessages.DB_DATA_UPDATED);
+                    observer.complete();
+                };
+
+                const objectStore = transaction.objectStore(objectStoreName);
+
+                const update = (item, key) => {
+
+                    return new Rx.Observable((updateReqObserver) => {
+
+                        const updateRequest = objectStore.put(item, key);
+
+                        const onRequestError = (error) => {
+                            updateReqObserver.error(indexedDbMessages.DB_DATA_UPDATE_ERROR);
+                        };
+
+                        const onSuccess = (event) => {
+                            updateReqObserver.next(event);
+                            updateReqObserver.complete();
+                        };
+
+                        updateRequest.addEventListener(eventTypes.success, onSuccess);
+                        updateRequest.addEventListener(eventTypes.error, onRequestError);
+
+                        return () => {
+                            updateRequest.removeEventListener(eventTypes.success, onSuccess);
+                            updateRequest.removeEventListener(eventTypes.error, onRequestError);
+                        };
+
+                    });
+                };
+
+                transaction.updateEventListener(eventTypes.error, onTransactionError);
+                transaction.updateEventListener(eventTypes.complete, onComplete);
+
+                const items$ = Rx.from(data);
+                const keys$ = Rx.from(keys);
+
+                const updateRequestSubscriber = Rx.zip(items$, keys$).pipe(
+
+                    Rx.operators.switchMap((values) => {
+
+                        return update(values[0], values[1]);
+
+                    })
+
+                ).subscribe(() => { }, (error) => { observer.error(error); });
+
+                return () => {
+                    transaction.removeEventListener(eventTypes.complete, onComplete);
+                    transaction.removeEventListener(eventTypes.error, onTransactionError);
+                    updateRequestSubscriber.unsubscribe();
                 };
 
             }
@@ -337,25 +490,25 @@ window.dnetindexeddbinterop = (function () {
                 const objectStore = transaction.objectStore(objectStoreName);
 
                 const getByKey = () => {
-                    return new Rx.Observable((addReqObserver) => {
+                    return new Rx.Observable((getReqObserver) => {
 
-                        const addRequest = objectStore.get(key);
+                        const getRequest = objectStore.get(key);
 
                         const onRequestError = (error) => {
-                            addReqObserver.error(indexedDbMessages.DB_GETBYKEY_ERROR);
+                            getReqObserver.error(indexedDbMessages.DB_GETBYKEY_ERROR);
                         };
 
                         const onSuccess = (event) => {
-                            addReqObserver.next(addRequest.result);
-                            addReqObserver.complete();
+                            getReqObserver.next(getRequest.result);
+                            getReqObserver.complete();
                         };
 
-                        addRequest.addEventListener(eventTypes.success, onSuccess);
-                        addRequest.addEventListener(eventTypes.error, onRequestError);
+                        getRequest.addEventListener(eventTypes.success, onSuccess);
+                        getRequest.addEventListener(eventTypes.error, onRequestError);
 
                         return () => {
-                            addRequest.removeEventListener(eventTypes.success, onSuccess);
-                            addRequest.removeEventListener(eventTypes.error, onRequestError);
+                            getRequest.removeEventListener(eventTypes.success, onSuccess);
+                            getRequest.removeEventListener(eventTypes.error, onRequestError);
                         };
 
                     });
@@ -363,13 +516,13 @@ window.dnetindexeddbinterop = (function () {
 
                 transaction.addEventListener(eventTypes.error, onTransactionError);
 
-                const addRequestSubscriber = getByKey().subscribe((item) => {
+                const getRequestSubscriber = getByKey().subscribe((item) => {
                     observer.next(item);
                     observer.complete();
                 }, (error) => { observer.error(error); });
 
                 return () => {
-                    addRequestSubscriber.unsubscribe();
+                    getRequestSubscriber.unsubscribe();
                 };
 
             }
@@ -536,8 +689,8 @@ window.dnetindexeddbinterop = (function () {
                     });
                 };
 
-                let objects = [];
-                const getAll = (count) => {
+                const objects = [];
+                const getAllLocal = (count) => {
                     return new Rx.Observable((cursorObserver) => {
 
                         const cursorRequest = objectStore.openCursor();
@@ -548,11 +701,11 @@ window.dnetindexeddbinterop = (function () {
 
                         const onSuccess = (event) => {
 
-                            let result = event.target.result;
+                            const result = event.target.result;
 
                             if (result !== null) {
 
-                                let item = result.value;
+                                const item = result.value;
                                 objects.push(item);
 
                                 if (objects.length === count) {
@@ -583,7 +736,7 @@ window.dnetindexeddbinterop = (function () {
                 const getAllSubscriber = objectCount().pipe(
 
                     Rx.operators.mergeMap((count) => {
-                        return getAll(count);
+                        return getAllLocal(count);
                     })
 
                 ).subscribe((data) => {
@@ -618,12 +771,12 @@ window.dnetindexeddbinterop = (function () {
 
                 const objectStore = transaction.objectStore(objectStoreName);
 
-                let objects = [];
+                const objects = [];
 
-                const getRange = () => {
+                const getRangeLocal = () => {
                     return new Rx.Observable((cursorObserver) => {
 
-                        let boundedKeyRange = IDBKeyRange.bound(lowerBound, upperBound, false, false);
+                        const boundedKeyRange = IDBKeyRange.bound(lowerBound, upperBound, false, false);
                         const cursorRequest = objectStore.openCursor(boundedKeyRange);
 
                         const onRequestError = (error) => {
@@ -632,11 +785,11 @@ window.dnetindexeddbinterop = (function () {
 
                         const onSuccess = (event) => {
 
-                            let result = event.target.result;
+                            const result = event.target.result;
 
                             if (result !== null) {
 
-                                let item = result.value;
+                                const item = result.value;
                                 objects.push(item);
                                 result.continue();
 
@@ -659,7 +812,7 @@ window.dnetindexeddbinterop = (function () {
 
                 transaction.addEventListener(eventTypes.success, onTransactionError);
 
-                const getRangeSubscriber = getRange().subscribe((data) => {
+                const getRangeSubscriber = getRangeLocal().subscribe((data) => {
                     observer.next(data);
                     observer.complete();
                 }, (error) => { observer.error(error); });
@@ -689,7 +842,7 @@ window.dnetindexeddbinterop = (function () {
 
                 const objectStore = transaction.objectStore(objectStoreName);
 
-                let objects = [];
+                const objects = [];
 
                 const getRangeByIndex = () => {
 
@@ -714,7 +867,7 @@ window.dnetindexeddbinterop = (function () {
 
                         const onSuccess = (event) => {
 
-                            let result = event.target.result;
+                            const result = event.target.result;
 
                             if (result !== null) {
 
@@ -754,10 +907,80 @@ window.dnetindexeddbinterop = (function () {
         });
     }
 
+    function getExtent(dbModel, objectStoreName, dbIndex, extentType) {
 
-    function getDbModel(dbModelId) {
+        return Rx.Observable.create((observer) => {
 
-        const dbModel = dbModels.find(element => element.dbModelId = dbModelId);
+            if (dbModel.instance === null) {
+
+                observer.error(indexedDbMessages.DB_CLOSE);
+
+            } else {
+
+                const transaction = dbModel.instance.transaction([objectStoreName], transactionTypes.readonly);
+
+                const onTransactionError = (error) => {
+                    observer.error(indexedDbMessages.DB_TRANSACTION_ERROR);
+                };
+
+                const objectStore = transaction.objectStore(objectStoreName);
+
+                const getKeyOrIndexExtent = () => {
+                    return new Rx.Observable((getReqObserver) => {
+
+                        if (dbIndex) {
+                            // Search By Index
+                            const index = objectStore.index(dbIndex);
+                            cursorRequest = index.openCursor(null, extentType);
+                        } else {
+                            // Search By Key
+                            cursorRequest = objectStore.openCursor(null, extentType);
+                        }
+
+                        const onRequestError = (error) => {
+                            getReqObserver.error(indexedDbMessages.DB_GETBYKEY_ERROR);
+                        };
+
+                        const onSuccess = (event) => {
+                            if (cursorRequest.result) {
+                                getReqObserver.next(cursorRequest.result.key);
+                            } else {
+                                getReqObserver.next(null);
+                            }
+
+                            getReqObserver.complete();
+                        };
+
+                        cursorRequest.addEventListener(eventTypes.success, onSuccess);
+                        cursorRequest.addEventListener(eventTypes.error, onRequestError);
+
+                        return () => {
+                            cursorRequest.removeEventListener(eventTypes.success, onSuccess);
+                            cursorRequest.removeEventListener(eventTypes.error, onRequestError);
+                        };
+
+                    });
+                };
+
+                transaction.addEventListener(eventTypes.error, onTransactionError);
+
+                const getRequestSubscriber = getKeyOrIndexExtent().subscribe((item) => {
+                    observer.next(item);
+                    observer.complete();
+                }, (error) => { observer.error(error); });
+
+                return () => {
+                    getRequestSubscriber.unsubscribe();
+                };
+
+            }
+        });
+    }
+
+
+    function getDbModel(dbModelGuid) {
+
+        const dbModel = dbModels.find(element => element.dbModel.dbModelGuid === dbModelGuid);
 
         return dbModel;
     }
@@ -765,73 +988,87 @@ window.dnetindexeddbinterop = (function () {
     return {
 
         openDb: async function (indexedDbDatabaseModel) {
-          
-            var dbModelId = await open(indexedDbDatabaseModel).pipe(Rx.operators.take(1)).toPromise();
+
+            const dbModelId = await open(indexedDbDatabaseModel).pipe(Rx.operators.take(1)).toPromise();
 
             return dbModelId;
         },
 
         deleteDb: async function (indexedDbDatabaseModel) {
 
-            let dbModel = getDbModel(indexedDbDatabaseModel.dbModelId).dbModel;
+            const dbModel = getDbModel(indexedDbDatabaseModel.dbModelGuid).dbModel;
 
             return await deleteDb(dbModel).pipe(Rx.operators.take(1)).toPromise();
         },
 
         addItems: async function (indexedDbDatabaseModel, objectStoreName, items) {
 
-            let dbModel = getDbModel(indexedDbDatabaseModel.dbModelId).dbModel;
+            const dbModel = getDbModel(indexedDbDatabaseModel.dbModelGuid).dbModel;
 
             return await addItems(dbModel, objectStoreName, items).pipe(Rx.operators.take(1)).toPromise();
         },
 
         updateItems: async function (indexedDbDatabaseModel, objectStoreName, items) {
 
-            let dbModel = getDbModel(indexedDbDatabaseModel.dbModelId).dbModel;
+            const dbModel = getDbModel(indexedDbDatabaseModel.dbModelGuid).dbModel;
 
             return await updateItems(dbModel, objectStoreName, items).pipe(Rx.operators.take(1)).toPromise();
         },
 
+        updateItemsByKey: async function (indexedDbDatabaseModel, objectStoreName, items, keys) {
+
+            const dbModel = getDbModel(indexedDbDatabaseModel.dbModelGuid).dbModel;
+
+            return await updateItemsByKey(dbModel, objectStoreName, items, keys).pipe(Rx.operators.take(1)).toPromise();
+        },
+
         getByKey: async function (indexedDbDatabaseModel, objectStoreName, key) {
 
-            let dbModel = getDbModel(indexedDbDatabaseModel.dbModelId).dbModel;
+            const dbModel = getDbModel(indexedDbDatabaseModel.dbModelGuid).dbModel;
 
             return await getByKey(dbModel, objectStoreName, key).pipe(Rx.operators.take(1)).toPromise();
         },
 
         deleteByKey: async function (indexedDbDatabaseModel, objectStoreName, key) {
 
-            let dbModel = getDbModel(indexedDbDatabaseModel.dbModelId).dbModel;
+            const dbModel = getDbModel(indexedDbDatabaseModel.dbModelGuid).dbModel;
 
             return await deleteByKey(dbModel, objectStoreName, key).pipe(Rx.operators.take(1)).toPromise();
         },
 
         deleteAll: async function (indexedDbDatabaseModel, objectStoreName) {
 
-            let dbModel = getDbModel(indexedDbDatabaseModel.dbModelId).dbModel;
-           
+            const dbModel = getDbModel(indexedDbDatabaseModel.dbModelGuid).dbModel;
+
             return await deleteAll(dbModel, objectStoreName).pipe(Rx.operators.take(1)).toPromise();
         },
 
         getAll: async function (indexedDbDatabaseModel, objectStoreName) {
 
-            let dbModel = getDbModel(indexedDbDatabaseModel.dbModelId).dbModel;
+            const dbModel = getDbModel(indexedDbDatabaseModel.dbModelGuid).dbModel;
 
             return await getAll(dbModel, objectStoreName).pipe(Rx.operators.take(1)).toPromise();
         },
 
         getRange: async function (indexedDbDatabaseModel, objectStoreName, lowerBound, upperBound) {
 
-            let dbModel = getDbModel(indexedDbDatabaseModel.dbModelId).dbModel;
+            const dbModel = getDbModel(indexedDbDatabaseModel.dbModelGuid).dbModel;
 
             return await getRange(dbModel, objectStoreName, lowerBound, upperBound).pipe(Rx.operators.take(1)).toPromise();
         },
 
         getByIndex: async function (indexedDbDatabaseModel, objectStoreName, lowerBound, upperBound, dbIndex, isRange) {
 
-            let dbModel = getDbModel(indexedDbDatabaseModel.dbModelId).dbModel;
+            const dbModel = getDbModel(indexedDbDatabaseModel.dbModelGuid).dbModel;
 
             return await getByIndex(dbModel, objectStoreName, lowerBound, upperBound, dbIndex, isRange).pipe(Rx.operators.take(1)).toPromise();
+        },
+
+        getExtent: async function (indexedDbDatabaseModel, objectStoreName, dbIndex, extentType) {
+
+            const dbModel = getDbModel(indexedDbDatabaseModel.dbModelGuid).dbModel;
+
+            return await getExtent(dbModel, objectStoreName, dbIndex, extentTypes[extentType]).pipe(Rx.operators.take(1)).toPromise();
         }
 
     };
