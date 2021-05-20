@@ -257,7 +257,7 @@
       "url": "_framework\/crmme.shared.dll"
     },
     {
-      "hash": "sha256-PZy0zniZSYSWVuPrIw6OEpz5y\/yylxXxFbMeNsW9cTM=",
+      "hash": "sha256-O8IBXepEmtG\/MD2PtIxIsxYPXs+DzJ8g1nZA6FpsJnc=",
       "url": "_framework\/crmme.dll"
     },
     {
@@ -389,7 +389,7 @@
       "url": "_framework\/System.Private.CoreLib.dll"
     },
     {
-      "hash": "sha256-ww+EFGL\/Nu0k4J1Q6IAtFaExue5V1AQBfDVjD4dZUq4=",
+      "hash": "sha256-qtu7J\/jaKaDBT344xfHWLptGdzpgtguYXMWyLfmamCY=",
       "url": "_framework\/blazor.boot.json"
     },
     {
@@ -397,5 +397,5 @@
       "url": "_framework\/blazor.webassembly.js"
     }
   ],
-  "version": "dTAUcjoI"
+  "version": "bjAQ3TX7"
 };
