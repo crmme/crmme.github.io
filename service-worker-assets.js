@@ -237,7 +237,7 @@
       "url": "_framework\/Microsoft.Extensions.Primitives.dll"
     },
     {
-      "hash": "sha256-ZX7yTUXppWlQzt\/qwTD3iOkjq\/3soVfq3sxpC44hZdg=",
+      "hash": "sha256-fAvvir67RmBAcB1qmKZuKkW8gg4pzRfdFl+RlTxx4e0=",
       "url": "_framework\/Microsoft.Graph.dll"
     },
     {
@@ -293,7 +293,7 @@
       "url": "_framework\/crmme.shared.dll"
     },
     {
-      "hash": "sha256-vxr1wjpuAgfoUS5yKs5H33K5PRI7K5rptQUdSC+mgDc=",
+      "hash": "sha256-sTJtCMvZa1N0zuXQwZ74M0RLseHXHsuiCQ7OKfj5raI=",
       "url": "_framework\/crmme.dll"
     },
     {
@@ -485,7 +485,7 @@
       "url": "_framework\/System.Private.CoreLib.dll"
     },
     {
-      "hash": "sha256-e8awjFide5wycJSNZlaW2ZzhsDbtDqNI8zRl3BhlC\/8=",
+      "hash": "sha256-jYScS\/CW5mWt5FSrs0g0yr9hSyZ4uI4BAVBhHOFnRog=",
       "url": "_framework\/blazor.boot.json"
     },
     {
@@ -493,5 +493,5 @@
       "url": "_framework\/blazor.webassembly.js"
     }
   ],
-  "version": "gOxuuXtY"
+  "version": "i9HOAwk9"
 };
